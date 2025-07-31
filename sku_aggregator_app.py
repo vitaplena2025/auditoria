@@ -24,7 +24,7 @@ st.markdown(
     """
 )
 
-# 1) Leemos el maestro
+# 1) Leer y mostrar el maestro
 try:
     master = pd.read_csv(MASTER_CSV_URL)
 except Exception as e:
@@ -36,6 +36,10 @@ master_sku_col = master.columns[0]
 master = master[[master_sku_col]].drop_duplicates().copy()
 master.columns = ["SKU"]
 master["Total"] = 0  # columna a rellenar
+
+st.subheader("📋 Maestro de SKUs")
+st.dataframe(master, use_container_width=True)
+
 
 # 2) Subida de archivos
 uploaded = st.file_uploader(
@@ -84,11 +88,10 @@ if uploaded:
     summary["Total"] = summary["Total"].astype(int)
 
     # 4) Hacer left join sobre el maestro
-    result = master.merge(summary, on="SKU", how="left", suffixes=("", "_y"))
-    result["Total"] = result["Total_y"].fillna(0).astype(int)
-    result = result[["SKU", "Total"]]
+    result = master[["SKU"]].merge(summary, on="SKU", how="left")
+    result["Total"] = result["Total"].fillna(0).astype(int)
 
-    st.success("✅ Maestro rellenado con totales:")
+    st.subheader("✅ Maestro con Totales Actualizados")
     st.dataframe(result, use_container_width=True)
 
     # 5) Botón de descarga
