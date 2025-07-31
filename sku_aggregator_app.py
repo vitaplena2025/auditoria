@@ -48,9 +48,10 @@ if master_file and vitaplena_file and egg_file:
     # Leer SKUs de Eggmarket (columna F desde fila 7)
     df_egg = pd.read_excel(egg_file, usecols=[5], skiprows=6, names=["SKU"])
 
-    # Limpiar y contar SKUs
-    df_vita["SKU"] = df_vita["SKU"].astype(str).str.split(':',1).str[-1]
-    df_egg["SKU"] = df_egg["SKU"].astype(str).str.split(':',1).str[-1]
+    # Limpiar y contar SKUs (mantener parte después de ':' si existe)
+    df_vita["SKU"] = df_vita["SKU"].astype(str).apply(lambda x: x.split(':',1)[1] if ':' in x else x)
+    df_egg["SKU"] = df_egg["SKU"].astype(str).apply(lambda x: x.split(':',1)[1] if ':' in x else x)
+
     counts = pd.concat([df_vita, df_egg], ignore_index=True)
     summary = counts["SKU"].value_counts().rename_axis("SKU").reset_index(name="Total")
 
@@ -97,3 +98,8 @@ if master_file and vitaplena_file and egg_file:
 elif master_file:
     st.info("Sube Vitaplena.xlsx y Eggmarket.xlsx para procesar SKUs.")
 
+else:
+    if not master_file:
+        pass
+    else:
+        st.info("Esperando los archivos de ventas (Vitaplena y Eggmarket).")
