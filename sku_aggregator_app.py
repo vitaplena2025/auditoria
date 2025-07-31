@@ -4,36 +4,31 @@ from io import BytesIO
 from openpyxl import load_workbook
 
 st.set_page_config(
-    page_title="SKU Aggregator con Master Formateado",
+    page_title="SKU Aggregator - Maestro con Formato",
     page_icon="📦",
     layout="wide",
 )
 
-st.title("📦 SKU Aggregator - Maestro Formateado")
+st.title("📦 SKU Aggregator - Maestro con Formato")
 st.markdown(
     """
-    1. Sube tu **archivo maestro** (Excel) con layout y colores propios.
-    2. Sube tus archivos de ventas (Vitaplena/Eggmarket).
-    3. La app rellenará la columna **O** ("Totales") a partir de la fila 4,
-       usando SKUs en la columna **B**.
+    1. Sube tu **archivo maestro** (Excel) con layout y colores propios.  
+    2. Sube tus archivos de ventas (Vitaplena/Eggmarket).  
+    3. La app rellenará la columna **master** (encabezado en O3), 
+       buscando SKUs en columna A desde la fila 4.
     """
 )
 
-# Layout de uploaders
-col1, col2 = st.columns(2)
-with col1:
-    master_file = st.file_uploader(
-        "Sube tu archivo maestro (xlsx)",
-        type=["xlsx"],
-        key="master"
-    )
-with col2:
-    sales_files = st.file_uploader(
-        "Sube archivos de ventas (xlsx/xls)",
-        type=["xlsx", "xls"],
-        accept_multiple_files=True,
-        key="sales"
-    )
+# Subida del maestro
+master_file = st.file_uploader(
+    "1️⃣ Sube tu archivo maestro (xlsx)",
+    type=["xlsx"], key="master"
+)
+# Subida de archivos de ventas
+sales_files = st.file_uploader(
+    "2️⃣ Sube archivos de ventas (xlsx/xls)",
+    type=["xlsx", "xls"], accept_multiple_files=True, key="sales"
+)
 
 if not master_file:
     st.info("Por favor, sube primero el archivo maestro para conservar su formato.")
@@ -43,10 +38,22 @@ if master_file:
     wb = load_workbook(filename=master_file, data_only=False)
     ws = wb.active
 
-    # Preview maestro: mostrar primeras 10 SKUs desde B4
-    skus_sample = [ws.cell(row=r, column=2).value for r in range(4, min(ws.max_row+1, 14))]
-    st.subheader("📋 SKUs del Maestro (muestra B4:B13)")
-    st.write(skus_sample)
+    # Identificar índice de columna 'master' en la fila 3
+    master_col = None
+    for col in range(1, ws.max_column + 1):
+        header = ws.cell(row=3, column=col).value
+        if isinstance(header, str) and header.strip().lower() == 'master':
+            master_col = col
+            break
+    if master_col is None:
+        st.error("No se encontró la columna 'master' en la fila 3.")
+        st.stop()
+
+    # Mostrar encabezado de master
+    st.write(f"Columna 'master' encontrada en la posición: {master_col} (columna {chr(64+master_col)})")
+
+    if not sales_files:
+        st.info("Ahora sube al menos un archivo de ventas para procesar los totales.")
 
     if sales_files:
         # Procesar archivos de ventas
@@ -63,37 +70,40 @@ if master_file:
 
             tmp = df_sales[[sku_col, qty_col]].copy()
             tmp.columns = ["SKU", "Quantity"]
-            # Extraer parte tras ':' si existe
-            tmp["SKU"] = tmp["SKU"].astype(str).apply(lambda x: x.split(':', 1)[1] if ':' in x else x)
-            tmp["Quantity"] = pd.to_numeric(tmp["Quantity"], errors="coerce").fillna(0)
+            tmp["SKU"] = tmp["SKU"].astype(str).apply(
+                lambda x: x.split(':', 1)[1] if ':' in x else x
+            )
+            tmp["Quantity"] = pd.to_numeric(tmp["Quantity"], errors="coerce").fillna(0).astype(int)
             dfs.append(tmp)
 
-        # Unir y agrupar totales
+        # Unir y agrupar totales de ventas
         all_data = pd.concat(dfs, ignore_index=True)
         summary = (
             all_data.groupby("SKU", as_index=False)["Quantity"].sum()
                    .rename(columns={"Quantity": "Total"})
         )
         summary["Total"] = summary["Total"].astype(int)
+        totals_map = {str(r.SKU): r.Total for r in summary.itertuples()}
 
-        # Mapeo de totales
-        totals_map = {str(row.SKU): row.Total for row in summary.itertuples()}
-
-        # Actualizar celdas en columna O (15) empezando en fila 4
+        # Actualizar columna 'master' en master_file
         for r in range(4, ws.max_row + 1):
-            sku_val = ws.cell(row=r, column=2).value
-            if sku_val is None:
+            sku_cell = ws.cell(row=r, column=1).value
+            if sku_cell is None:
                 continue
-            sku_key = str(sku_val).split(':',1)[-1] if ':' in str(sku_val) else str(sku_val)
-            ws.cell(row=r, column=15, value=totals_map.get(sku_key, 0))
+            sku_key = str(sku_cell).split(':',1)[-1] if ':' in str(sku_cell) else str(sku_cell)
+            total_val = totals_map.get(sku_key, 0)
+            ws.cell(row=r, column=master_col, value=total_val)
 
-        # Preview resultados actualizados filas 4-13
-        updated = [(ws.cell(r,2).value, ws.cell(r,15).value) for r in range(4, min(ws.max_row+1,14))]
-        df_preview = pd.DataFrame(updated, columns=["SKU", "Totales"] )
-        st.subheader("✅ Totales Actualizados (B4:O13)")
-        st.table(df_preview)
+        # Vista previa de filas 4-13: SKU y Totales en master_col
+        preview = []
+        for r in range(4, min(ws.max_row, 13) + 1):
+            sku = ws.cell(row=r, column=1).value
+            total = ws.cell(row=r, column=master_col).value
+            preview.append((sku, total))
+        st.subheader("✅ Totales Actualizados en Maestro (fila 4-13)")
+        st.table(pd.DataFrame(preview, columns=["SKU", "Totales"]))
 
-        # Botón de descarga del maestro con formato intacto
+        # Botón de descarga maestro formateado con totales
         output = BytesIO()
         wb.save(output)
         output.seek(0)
@@ -103,5 +113,3 @@ if master_file:
             file_name="maestro_con_totales.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-    else:
-        st.info("Sube al menos un archivo de ventas para procesar los totales.")
