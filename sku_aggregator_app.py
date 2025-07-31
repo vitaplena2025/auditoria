@@ -1,104 +1,104 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO
-
-# URL del CSV maestro publicado en Google Sheets
-def get_master_url():
-    return (
-        "https://docs.google.com/spreadsheets/d/"
-        "e/2PACX-1vRTq2EZ4kh1-7FD6Q3V0__IJsKzFiqXoBmWxsyeSFFthQcoOiKgnKovFbfhvPqNIA/"
-        "pub?output=csv"
-    )
+from openpyxl import load_workbook
 
 st.set_page_config(
-    page_title="SKU Aggregator con Master Completo",
+    page_title="SKU Aggregator con Master Formateado",
     page_icon="📦",
     layout="centered",
 )
 
-st.title("📦 SKU Aggregator con Master Completo")
+st.title("📦 SKU Aggregator con Master Formateado")
 st.markdown(
     """
-    1. Se carga un **maestro completo** desde Google Sheets, sin alterar sus columnas.  
+    1. Sube tu **archivo maestro (Excel)** con formato personalizado.  
     2. Sube tus Excel de **Vitaplena** o **Eggmarket**.  
-    3. Se agrupan los SKUs y cantidades y se vuelcan en la columna **Totales**.
+    3. La app actualizará la **columna O** ("Totales") de tu maestro, conservando el layout y colores.
     """
 )
 
-# 1) Leer y mostrar el maestro completo
-try:
-    master_df = pd.read_csv(get_master_url())
-except Exception as e:
-    st.error(f"No pude leer el maestro: {e}")
-    st.stop()
-
-st.subheader("📋 Maestro Completo de SKUs")
-st.dataframe(master_df, use_container_width=True)
-
-# 2) Subida de archivos
-uploaded = st.file_uploader(
-    "Sube tus archivos Excel (xlsx/xls)",
-    type=["xlsx", "xls"],
-    accept_multiple_files=True
+# 1) Subida del maestro Excel
+master_file = st.file_uploader(
+    "Sube tu archivo maestro con formato (xlsx)",
+    type=["xlsx"],
+    key="master"
 )
 
-if uploaded:
-    dfs = []
-    for file in uploaded:
-        df = pd.read_excel(file)
-        name = file.name.lower()
-        # Detectar columnas según origen
-        if "vitaplena" in name:
-            sku_col = df.columns[3]
-            qty_col = df.columns[5]
-        elif "eggmarket" in name:
-            sku_col = df.columns[5]
-            qty_col = df.columns[6]
-        else:
-            st.warning(f"No se reconoce {file.name}, usando col 4 y 6 por defecto.")
-            sku_col = df.columns[3]
-            qty_col = df.columns[5]
+if master_file:
+    # Cargar libro con openpyxl para preservar formato
+    wb = load_workbook(filename=master_file, data_only=False)
+    ws = wb.active  # usa la primera hoja
 
-        temp = df[[sku_col, qty_col]].copy()
-        temp.columns = ["SKU", "Quantity"]
-        # Recortar parte tras ':' si existe
-        temp["SKU"] = temp["SKU"].astype(str).apply(
-            lambda x: x.split(":", 1)[1] if ":" in x else x
+    # Leer master a DataFrame para mostrar (opcional)
+    master_df = pd.DataFrame(ws.values)
+    st.subheader("📋 Vista previa del Maestro (solo datos)")
+    st.dataframe(master_df.head(10), use_container_width=True)
+
+    # 2) Subida de archivos de ventas
+    uploaded = st.file_uploader(
+        "Sube tus archivos Excel (Vitaplena/Eggmarket)",
+        type=["xlsx", "xls"],
+        accept_multiple_files=True,
+        key="sales"
+    )
+
+    if uploaded:
+        # Procesar ventas
+        dfs = []
+        for file in uploaded:
+            df = pd.read_excel(file)
+            name = file.name.lower()
+            if "vitaplena" in name:
+                sku_col, qty_col = df.columns[3], df.columns[5]
+            elif "eggmarket" in name:
+                sku_col, qty_col = df.columns[5], df.columns[6]
+            else:
+                sku_col, qty_col = df.columns[3], df.columns[5]
+
+            temp = df[[sku_col, qty_col]].copy()
+            temp.columns = ["SKU", "Quantity"]
+            temp["SKU"] = temp["SKU"].astype(str).apply(
+                lambda x: x.split(':',1)[1] if ':' in x else x
+            )
+            temp["Quantity"] = pd.to_numeric(temp["Quantity"], errors="coerce").fillna(0)
+            dfs.append(temp)
+
+        all_data = pd.concat(dfs, ignore_index=True)
+        summary = (
+            all_data.groupby("SKU", as_index=False)["Quantity"].sum()
+                  .rename(columns={"Quantity": "Total"})
         )
-        # Forzar numérico a Quantity
-        temp["Quantity"] = pd.to_numeric(temp["Quantity"], errors="coerce").fillna(0)
-        dfs.append(temp)
+        summary["Total"] = summary["Total"].astype(int)
 
-    # 3) Concatenar y agrupar totales
-    all_data = pd.concat(dfs, ignore_index=True)
-    summary = (
-        all_data
-        .groupby("SKU", as_index=False)["Quantity"]
-        .sum()
-        .rename(columns={"Quantity": "Totales"})
-    )
-    summary["Totales"] = summary["Totales"].astype(int)
+        # 3) Actualizar columna O en el workbook
+        # Asumimos encabezados en fila 1, SKUs en columna A, Totales en columna O
+        sku_map = {str(r['SKU']): r['Total'] for _, r in summary.iterrows()}
+        for row in range(2, ws.max_row + 1):
+            sku_cell = ws.cell(row=row, column=1).value
+            if sku_cell is None:
+                continue
+            sku_str = str(sku_cell).split(':',1)[-1] if ':' in str(sku_cell) else str(sku_cell)
+            total_val = sku_map.get(sku_str, 0)
+            ws.cell(row=row, column=15, value=total_val)  # col 15 = O
 
-    # 4) Actualizar columna Totales en master_df sin alterar otras columnas
-    # Asegurar que exista la columna 'Totales'
-    if 'Totales' not in master_df.columns:
-        master_df['Totales'] = 0
-    # Crear diccionario de mapeo y asignar
-    totals_map = dict(zip(summary['SKU'], summary['Totales']))
-    master_df['Totales'] = master_df[master_df.columns[0]].map(totals_map).fillna(0).astype(int)
+        # Mostrar resultado
+        st.subheader("✅ Totales actualizados en Maestro (se conserva formato)")
+        # Mostrar primeras 10 filas con SKU y Totales
+        updated = []
+        for row in range(1, min(ws.max_row, 11) + 1):
+            sku = ws.cell(row=row, column=1).value
+            total = ws.cell(row=row, column=15).value
+            updated.append((sku, total))
+        st.table(pd.DataFrame(updated, columns=[master_df.iloc[0,0], 'Totales']))
 
-    st.subheader("✅ Maestro con Totales Actualizados")
-    st.dataframe(master_df, use_container_width=True)
-
-    # 5) Botón de descarga del maestro modificado
-    towrite = BytesIO()
-    with pd.ExcelWriter(towrite, engine="xlsxwriter") as writer:
-        master_df.to_excel(writer, index=False, sheet_name="MaestroConTotales")
-    towrite.seek(0)
-
-    st.download_button(
-        label="📥 Descargar maestro con totales",
-        data=towrite,
-        file_name="sku_master_with_totals.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+        # 4) Descargar workbook actualizado
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        st.download_button(
+            "📥 Descargar Maestro con Totales", 
+            data=output, 
+            file_name="maestro_con_totales.xlsx", 
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
