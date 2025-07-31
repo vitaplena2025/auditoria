@@ -40,6 +40,10 @@ if uploaded:
 
         temp = df[[sku_col, qty_col]].copy()
         temp.columns = ["SKU", "Quantity"]
+        # Extraer parte tras ':' si existe
+        temp["SKU"] = temp["SKU"].astype(str).apply(
+            lambda x: x.split(":", 1)[1] if ":" in x else x
+        )
         # Asegurar que Quantity sea numérico
         temp["Quantity"] = pd.to_numeric(temp["Quantity"], errors="coerce").fillna(0)
         dfs.append(temp)
@@ -50,7 +54,6 @@ if uploaded:
         all_data
         .groupby("SKU", as_index=False)["Quantity"].sum()
     )
-    # Convertir a entero y luego ordenar
     summary["Quantity"] = summary["Quantity"].astype(int)
     summary = summary.sort_values("Quantity", ascending=False)
 
