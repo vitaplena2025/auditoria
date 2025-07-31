@@ -2,20 +2,42 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 
+# URL del CSV maestro publicado
+MASTER_CSV_URL = (
+    "https://docs.google.com/spreadsheets/d/"
+    "e/2PACX-1vRTq2EZ4kh1-7FD6Q3V0__IJsKzFiqXoBmWxsyeSFFthQcoOiKgnKovFbfhvPqNIA/"
+    "pub?output=csv"
+)
+
 st.set_page_config(
-    page_title="SKU Aggregator",
+    page_title="SKU Aggregator con Master",
     page_icon="📦",
     layout="centered",
 )
 
-st.title("📦 SKU Aggregator")
+st.title("📦 SKU Aggregator con Master")
 st.markdown(
     """
-    Sube uno o más archivos Excel de **Vitaplena** o **Eggmarket**  
-    y obtén un resumen consolidado de todos los SKUs con sus cantidades totales.
+    1. Se carga un **maestro de SKUs** desde Google Sheets.  
+    2. Sube tus Excel de **Vitaplena** o **Eggmarket**.  
+    3. Se agrupan los SKUs y cantidades, y se vuelcan sobre el maestro.  
     """
 )
 
+# 1) Leemos el maestro
+try:
+    master = pd.read_csv(MASTER_CSV_URL)
+except Exception as e:
+    st.error(f"No pude leer el maestro: {e}")
+    st.stop()
+
+# Asumimos que el SKU maestro está en la primera columna
+master_sku_col = master.columns[0]
+master = master[[master_sku_col]].drop_duplicates().copy()
+master.columns = ["SKU"]
+master["Total"] = 0  # columna a rellenar
+
+# 2) Subida de archivos
 uploaded = st.file_uploader(
     "Sube tus archivos Excel (xlsx/xls)", 
     type=["xlsx", "xls"], 
@@ -27,6 +49,7 @@ if uploaded:
     for file in uploaded:
         df = pd.read_excel(file)
         name = file.name.lower()
+        # Detectar columnas según origen
         if "vitaplena" in name:
             sku_col = df.columns[3]
             qty_col = df.columns[5]
@@ -34,41 +57,49 @@ if uploaded:
             sku_col = df.columns[5]
             qty_col = df.columns[6]
         else:
-            st.warning(f"No se reconoce {file.name}, usando col 4 y 6 por defecto.")
+            st.warning(f"No se reconoce {file.name}, uso col 4 y 6 por defecto.")
             sku_col = df.columns[3]
             qty_col = df.columns[5]
 
         temp = df[[sku_col, qty_col]].copy()
         temp.columns = ["SKU", "Quantity"]
-        # Extraer parte tras ':' si existe
+
+        # Recortar tras ':' si existe
         temp["SKU"] = temp["SKU"].astype(str).apply(
             lambda x: x.split(":", 1)[1] if ":" in x else x
         )
-        # Asegurar que Quantity sea numérico
+        # Forzar numérico
         temp["Quantity"] = pd.to_numeric(temp["Quantity"], errors="coerce").fillna(0)
+
         dfs.append(temp)
 
-    # Concatenar todo y agrupar
+    # 3) Concatenar y agrupar totales
     all_data = pd.concat(dfs, ignore_index=True)
     summary = (
         all_data
-        .groupby("SKU", as_index=False)["Quantity"].sum()
+        .groupby("SKU", as_index=False)["Quantity"]
+        .sum()
+        .rename(columns={"Quantity": "Total"})
     )
-    summary["Quantity"] = summary["Quantity"].astype(int)
-    summary = summary.sort_values("Quantity", ascending=False)
+    summary["Total"] = summary["Total"].astype(int)
 
-    st.success("✅ Resumen generado:")
-    st.dataframe(summary, use_container_width=True)
+    # 4) Hacer left join sobre el maestro
+    result = master.merge(summary, on="SKU", how="left", suffixes=("", "_y"))
+    result["Total"] = result["Total_y"].fillna(0).astype(int)
+    result = result[["SKU", "Total"]]
 
-    # Preparar descarga Excel
+    st.success("✅ Maestro rellenado con totales:")
+    st.dataframe(result, use_container_width=True)
+
+    # 5) Botón de descarga
     towrite = BytesIO()
     with pd.ExcelWriter(towrite, engine="xlsxwriter") as writer:
-        summary.to_excel(writer, index=False, sheet_name="Summary")
+        result.to_excel(writer, index=False, sheet_name="Resumen")
     towrite.seek(0)
 
     st.download_button(
-        label="📥 Descargar resumen (Excel)",
+        label="📥 Descargar maestro con totales",
         data=towrite,
-        file_name="sku_summary.xlsx",
+        file_name="sku_master_with_totals.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
