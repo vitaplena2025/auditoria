@@ -6,7 +6,6 @@ st.set_page_config(
     page_title="SKU Aggregator",
     page_icon="📦",
     layout="centered",
-    initial_sidebar_state="auto",
 )
 
 st.title("📦 SKU Aggregator")
@@ -26,41 +25,42 @@ uploaded = st.file_uploader(
 if uploaded:
     dfs = []
     for file in uploaded:
-        # Leer cada Excel
         df = pd.read_excel(file)
         name = file.name.lower()
-        # Detectar columnas según origen
         if "vitaplena" in name:
-            sku_col = df.columns[3]       # columna 4
-            qty_col = df.columns[5]       # columna F (índice 5)
+            sku_col = df.columns[3]
+            qty_col = df.columns[5]
         elif "eggmarket" in name:
-            sku_col = df.columns[5]       # columna 6
-            qty_col = df.columns[6]       # columna 7
+            sku_col = df.columns[5]
+            qty_col = df.columns[6]
         else:
             st.warning(f"No se reconoce {file.name}, usando col 4 y 6 por defecto.")
             sku_col = df.columns[3]
             qty_col = df.columns[5]
+
         temp = df[[sku_col, qty_col]].copy()
         temp.columns = ["SKU", "Quantity"]
+        # Asegurar que Quantity sea numérico
+        temp["Quantity"] = pd.to_numeric(temp["Quantity"], errors="coerce").fillna(0)
         dfs.append(temp)
 
-    # Concatenar y agrupar
+    # Concatenar todo y agrupar
     all_data = pd.concat(dfs, ignore_index=True)
     summary = (
         all_data
-        .groupby("SKU", as_index=False)
-        .agg({"Quantity": "sum"})
-        .sort_values("Quantity", ascending=False)
+        .groupby("SKU", as_index=False)["Quantity"].sum()
     )
+    # Convertir a entero y luego ordenar
+    summary["Quantity"] = summary["Quantity"].astype(int)
+    summary = summary.sort_values("Quantity", ascending=False)
 
     st.success("✅ Resumen generado:")
     st.dataframe(summary, use_container_width=True)
 
-    # Prepara descarga de Excel
+    # Preparar descarga Excel
     towrite = BytesIO()
     with pd.ExcelWriter(towrite, engine="xlsxwriter") as writer:
         summary.to_excel(writer, index=False, sheet_name="Summary")
-        writer.save()
     towrite.seek(0)
 
     st.download_button(
